@@ -1,5 +1,7 @@
 # 🤖 OmniX Engineer
 
+> 🏆 **2026 RMUL Engineering Challenge — Shanghai Station Champion**
+>
 > **RoboMaster 2026 Engineer Robot Firmware** — STM32H723 FreeRTOS 嵌入式固件，驱动 9 轴机械臂 + 4 轮独立转向底盘 + 多 CAN 总线电机协同控制。
 
 **OmniX Engineer** is the embedded firmware for a RoboMaster 2026 competition Engineer robot. Built on STM32H723VGHx (Cortex-M7, hard-float) with FreeRTOS, it controls a 9-axis manipulator, 4-wheel independent swerve drive, and multi-bus CAN motor coordination — all in real-time.
