@@ -1,0 +1,8 @@
+//
+// Created by sirin on 2025/10/2.
+//
+
+#ifndef H723VG_V2_FREERTOS_LOG_TASK_H
+#define H723VG_V2_FREERTOS_LOG_TASK_H
+
+#endif //H723VG_V2_FREERTOS_LOG_TASK_H

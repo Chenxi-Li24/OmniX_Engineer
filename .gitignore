@@ -1,0 +1,55 @@
+# ===== Build Artifacts =====
+build*/
+cmake-build*/
+obj/
+*.elf
+*.hex
+*.bin
+*.o
+*.obj
+*.a
+*.map
+*.list
+*.d
+*.su
+*.crf
+*.dmp
+*.dep
+
+# ===== IDE =====
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.bak
+*.orig
+
+# ===== Eclipse / CubeMX =====
+.settings/
+Debug/
+Release/
+
+# ===== Keil MDK =====
+JLinkLog.txt
+JLinkSettings.ini
+*.uvguix.*
+*.uvoptx
+*.scvd
+*.ewd
+*.ewp
+*.eww
+
+# ===== Temp & Debug =====
+*.log
+*.tmp
+hs_err_*.log
+replay_*.log
+
+# ===== CI / Secrets =====
+.env
+.env.*
+*.secret
