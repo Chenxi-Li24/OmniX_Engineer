@@ -2,118 +2,138 @@
 
 > 🏆 **2026 RMUL Engineering Challenge — Shanghai Station Champion**
 >
-> **RoboMaster 2026 Engineer Robot Firmware** — STM32H723 FreeRTOS 嵌入式固件，驱动 9 轴机械臂 + 4 轮独立转向底盘 + 多 CAN 总线电机协同控制。
-
-**OmniX Engineer** is the embedded firmware for a RoboMaster 2026 competition Engineer robot. Built on STM32H723VGHx (Cortex-M7, hard-float) with FreeRTOS, it controls a 9-axis manipulator, 4-wheel independent swerve drive, and multi-bus CAN motor coordination — all in real-time.
+> **RoboMaster 2026 Engineer Robot** — STM32H723 dual-firmware embedded system with operator-side custom controller and robot-side 9-axis manipulator + 4-wheel swerve drive, communicating via RS232 / VT03 video link at 921600 bps.
 
 ---
 
-## 📁 Project Structure
+## 🏗️ System Architecture
 
 ```
-OmniX-Engineer/
-├── Core/                     # CubeMX-generated HAL init (USER CODE blocks)
-│   ├── Inc/                  # Headers (main.h, fdcan.h, usart.h, gpio.h ...)
-│   ├── Src/                  # Sources (main.c, freertos.c, stm32h7xx_it.c ...)
-│   └── Startup/              # CMSIS startup assembly
-├── Tasks/                    # FreeRTOS application tasks
-│   ├── Inc/                  # Task headers
-│   └── Src/                  # Task implementations
-├── Frameworks/               # Modular reusable components (auto-linked by CMake)
-│   ├── bsp_*/                # Board Support Package (hardware abstraction)
-│   ├── lib_*/                # Reusable libraries & algorithms
-│   ├── lib_adp_*/            # Motor/driver adapters
-│   └── tskptt_*/taskptt_*/   # Task prototype modules
-├── Applications/             # Higher-level orchestration (extensible)
-├── Drivers/                  # STM32CubeH7 HAL & CMSIS (vendor)
-├── Middlewares/               # FreeRTOS V10.3.1 kernel
-├── openocd_config/           # Debug probe configs (ST-Link, J-Link, CMSIS-DAP)
-├── ci/                       # CI build & Feishu notification scripts
-└── Docs/                     # Algorithm reports & calibration docs
+┌─────────────────────────────────────┐      0x0302 (30B, 30Hz)     ┌──────────────────────────────┐
+│   🎮 选手端 · Operator Controller    │ ──────────────────────────► │   🤖 机器人端 · Robot          │
+│   operator/                         │ ◄────────────────────────── │   robot/                      │
+│                                      │      0x0309 (30B, 10Hz)     │                              │
+│   STM32H723VGHx                     │                              │   STM32H723VGHx               │
+│   ┌───────────────────────────┐     │    RS232 over VT03 Video     │   ┌──────────────────────┐    │
+│   │ VT03 Receiver (UART9)     │─────│──── Link (921600 Baud) ──────│───│ VT03 TX (UART8)      │    │
+│   │ DR16 RC (UART6)           │     │                              │   │                      │    │
+│   │ Gimbal + Chassis Tasks    │     │                              │   │ J1-J3: LK MG8016E    │    │
+│   │ RC Priority: VT03 > DR16  │     │                              │   │ J4-J7: DM4310/4340   │    │
+│   │ JMU Processing            │     │                              │   │ J8-J9: Compensation  │    │
+│   │ Power Management          │     │                              │   │ 4× Swerve Drive      │    │
+│   └───────────────────────────┘     │                              │   │ Serial Servo (H10HM) │    │
+└─────────────────────────────────────┘                              └──────────────────────────────┘
 ```
 
 ---
 
-## ⚙️ Hardware Target
+## 📁 Repository Structure
+
+```
+OmniX_Engineer/
+├── robot/                   # 🤖 Robot-side firmware (engineer-controller)
+│   ├── Core/                # CubeMX HAL initialization
+│   ├── Tasks/               # FreeRTOS tasks (10 tasks + CAN routers)
+│   ├── Frameworks/          # 28+ BSP/lib/adapter modules (CMake auto-link)
+│   ├── Drivers/             # STM32CubeH7 HAL + CMSIS
+│   ├── Middlewares/         # FreeRTOS V10.3.1 kernel
+│   └── openocd_config/      # Debug probe configs
+│
+├── operator/                # 🎮 Operator-side custom controller
+│   ├── Core/                # CubeMX HAL initialization
+│   ├── Tasks/               # FreeRTOS tasks (9 tasks + CAN routers)
+│   ├── Frameworks/          # 28+ BSP/lib/adapter modules
+│   ├── Docs/                # Algorithm reports & calibration docs
+│   └── ci/                  # CI build scripts
+│
+└── README.md, LICENSE
+```
+
+---
+
+## 🔗 Communication Protocol (RS232 / VT03 Video Link)
+
+Both boards communicate through the **RoboMaster Referee System protocol** over UART at 921600 bps.
+
+### Frame Format
+
+```
+┌──────┬──────────┬─────┬──────┬────────┬───────────┬────────┐
+│ SOF  │ DataLen  │ Seq │ CRC8 │ CmdID  │  Payload  │ CRC16  │
+│ 0xA5 │  2 bytes │  1B │  1B  │ 2 bytes│  N bytes  │ 2 bytes│
+└──────┴──────────┴─────┴──────┴────────┴───────────┴────────┘
+```
+
+### Custom Controller Commands
+
+| CmdID | Direction | Hz | Size | Description |
+|-------|-----------|-----|------|-------------|
+| `0x0302` | Operator → Robot | 30 Hz | 30B | Joint target positions (J1–J7) |
+| `0x0309` | Robot → Operator | 10 Hz | 30B | Joint feedback + online status |
+
+### Joint Mapping (0x0302 Payload)
+
+| Joint | Motor | Range | Description |
+|-------|-------|-------|-------------|
+| J1 | LK MG8016E | 240° | Base rotation |
+| J2 | LK MG8016E | — | Shoulder |
+| J3 | LK MG8016E | — | Elbow |
+| J4 | DM4340 | — | Arm roll (Big Roll) |
+| J5 | DM4310 | — | Wrist yaw |
+| J6 | DM4310 | — | Wrist roll |
+| J7 | DM4310 | — | Gripper / jaw |
+
+Where raw → degrees conversion: `deg = (raw - zero) × 240.0 ÷ 1000.0`
+
+---
+
+## ⚙️ Hardware Target (Both Boards)
 
 | Component | Detail |
 |-----------|--------|
-| **MCU** | STM32H723VGHx (Cortex-M7 @ 550 MHz, hard-float `fpv5-sp-d16`) |
+| **MCU** | STM32H723VGHx (Cortex-M7 @ 550 MHz, `fpv5-sp-d16`) |
 | **RTOS** | FreeRTOS V10.3.1 (CMSIS-RTOS V2) |
 | **Toolchain** | `arm-none-eabi-gcc` |
 | **Build** | CMake 3.21+ with auto-discovered Frameworks |
-
-### Peripherals
-
-| Peripheral | Usage |
-|------------|-------|
-| FDCAN1/2/3 | Motor bus communication (500 kbps+) |
-| SPI1/2/3 | BMI088 IMU, MCP2518FD external CAN-FD |
-| I2C1/2 | EEPROM (24C02), OLED, VT03 camera |
-| UART1 | DMA-backed debug logging |
-| UART6 | DR16 remote control receiver |
-| UART8 | Referee system protocol (921600 bps) |
-| UART9 | Serial servo bus (HX-10HM) |
-| TIM1/2/3/4/8 | PWM / Motor control |
-| OCTOSPI | PSRAM / external flash |
-| CORDIC, FMAC | Hardware math accelerators |
+| **FDCAN** | 3× buses (500 kbps+), MCP2518FD external CAN-FD |
+| **IMU** | BMI088 ×2 (SPI, 6-axis) |
+| **RC** | DR16 (UART6) + VT03 Receiver (UART9) |
+| **Debug** | OpenOCD (ST-Link / J-Link / CMSIS-DAP) |
 
 ---
 
-## 🤖 Robot Subsystems
+## 🤖 Subsystems
 
-### 🚗 Chassis — 4-Wheel Independent Swerve Drive
-
-4 个独立转向驱动模块，全向移动。
+### Chassis — 4-Wheel Independent Swerve Drive
 
 | Axis | Motor | Bus | Control |
 |------|-------|-----|---------|
-| 4× Steering | GM6020 ×4 | CAN Bus 1 (IDs 1-4) | Angle PID |
-| 4× Drive | C620 ×4 | CAN Bus 2 (IDs 1-4) | Speed PID |
+| 4× Steering | GM6020 ×4 | CAN1 (ID 1-4) | Angle PID |
+| 4× Drive | C620 ×4 | CAN2 (ID 1-4) | Speed PID |
 
-> **Algorithm**: Swerve kinematics → Cascade PID (angle + speed) → Current output
+> Algorithm: Swerve kinematics → cascade PID → current output
 
-### 🦾 Gimbal — 9-Axis Manipulator
+### Manipulator — 9-Axis Control
 
-| Joint | Motor | Bus | Mode | Description |
-|-------|-------|-----|------|-------------|
-| J1–J3 | LK MG8016E ×3 | CAN Bus 1/2/3 | Torque-Position | Main arm joints |
-| J4–J7 | DM4310 ×4 | CAN Bus 1/3 | Angle PID (MIT) | Wrist + end-effector |
-| J8–J9 | DM4310/DM4340 ×2 | CAN Bus 3 | Torque Assist | J2/J3 gravity compensation |
-
-### 🔫 Shoot
-
-| Motor | Bus | Description |
-|-------|-----|-------------|
-| C620 ×2 | CAN Bus 2 | Firing wheel + feed |
-
-### 🎯 Sensors
-
-| Sensor | Interface | Purpose |
-|--------|-----------|---------|
-| BMI088 (×2) | SPI | 6-axis IMU — attitude estimation |
-| MCP2518FD | SPI | External CAN-FD controller |
-| DR16 Receiver | UART | Remote control (RC input) |
-| Referee System | UART (921600 bps) | Competition protocol |
-| 24C02 EEPROM | I2C | Calibration persistence |
-| VT03 Camera | UART / I2C | Video transmission |
+| Joint | Motor | Bus | Mode |
+|-------|-------|-----|------|
+| J1–J3 | LK MG8016E ×3 | CAN1/2/3 | Torque-Position |
+| J4–J7 | DM4310/4340 | CAN1/3 | Angle PID (MIT) |
+| J8–J9 | DM4310/4340 ×2 | CAN3 | Torque Assist |
 
 ---
 
 ## 📋 FreeRTOS Tasks
 
-| Task | Priority | Stack | Role |
-|------|----------|-------|------|
-| `LED_Task` | Low | 1 KB | WS2812 LED animations |
-| `RC_Task` | AboveNormal | 1 KB | DR16 remote control decode |
-| `Log_Task` | Low | 4 KB | DMA UART debug logging |
-| `Chassis_Task` | High | 4 KB | Swerve drive kinematics + PID |
-| `Gimbal_Task` | High | 4 KB | J4–J7 DM motor control |
-| `Shoot_Task` | High | 4 KB | Firing mechanism control |
-| `Referee_Task` | High | 2 KB | Competition system protocol |
-| `Gimbal_behavior` | High | 2 KB | J1–J3 LK motor + J8–J9 compensation |
-| `IMU_Task` | High | 2 KB | BMI088 attitude estimation |
-| `SerialServo_Task` | Normal | 1 KB | HX-10HM serial bus servo |
+| Task | Priority | Role |
+|------|----------|------|
+| `RC_Task` | **Realtime7** (operator) | DR16/VT03 input arbitration |
+| `Chassis_Task` | High | Swerve drive kinematics |
+| `Gimbal_Task` | High | DM J4–J7 control |
+| `Gimbal_behavior` | High | LK J1–J3 + J8–J9 compensation |
+| `Referee_Task` | High | 0x0302/0x0309 protocol handler |
+| `IMU_Task` | High | BMI088 attitude estimation |
+| `SerialServo_Task` | Normal (robot only) | HX-10HM serial bus |
 
 ---
 
@@ -121,99 +141,64 @@ OmniX-Engineer/
 
 ### Prerequisites
 
-- `arm-none-eabi-gcc` toolchain (ARM GNU Toolchain)
-- CMake ≥ 3.21
-- OpenOCD (for flashing/debugging)
+```bash
+# ARM GNU Toolchain
+arm-none-eabi-gcc --version
+# CMake ≥ 3.21
+cmake --version
+```
 
 ### Build
 
 ```bash
-# Configure
+# Robot-side firmware
+cd robot
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-
-# Compile (produces .elf, .hex, .bin)
 cmake --build build
 
-# Check memory footprint
-arm-none-eabi-size build/h723vg-v2-freertos.elf
+# Operator-side firmware
+cd ../operator
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
 ```
 
 ### Flash
 
 ```bash
-# ST-Link probe
-openocd -f openocd_config/omxdevh7-stlk.cfg \
-  -c "program build/h723vg-v2-freertos.elf verify reset exit"
-
-# J-Link probe
-openocd -f openocd_config/omxdevh7-jlnk.cfg \
-  -c "program build/h723vg-v2-freertos.elf verify reset exit"
+# ST-Link
+openocd -f robot/openocd_config/omxdevh7-stlk.cfg \
+  -c "program robot/build/h723vg-v2-freertos.elf verify reset exit"
 ```
 
 ---
 
 ## 🧩 Frameworks Module System
 
-The `Frameworks/` directory uses a convention-based auto-discovery build system:
-
-```cmake
-# CMake auto-discovers all modules in Frameworks/
-# Simple modules: Frameworks/<name>/{Inc,Src}/ → auto-linked static lib
-# Complex modules: add custom CMakeLists.txt with FRAMEWORK_EXPORT_TARGET
-```
+28+ reusable modules auto-discovered by CMake:
 
 | Category | Prefix | Examples |
 |----------|--------|----------|
-| **BSP** | `bsp_*` | `bsp_fdcan`, `bsp_bmi088`, `bsp_ws2812`, `bsp_buzzer`, `bsp_dr16` |
-| **Library** | `lib_*` | `lib_algos`, `lib_imu`, `lib_fault`, `lib_power_control` |
-| **Motor Adapter** | `lib_adp_*` | DJI C620, DJI GM6020, DM4310, LK MG8016E, Navision, HX-10HM |
-| **Task Prototype** | `tskptt_*` | `tskptt_imu`, `tskptt_exfdcan_router`, `taskptt_ntfdcan_router` |
+| BSP | `bsp_*` | fdcan, bmi088, ws2812, buzzer, dr16, vt03 |
+| Library | `lib_*` | algos (PID/Kalman/Mahony/EKF), imu, fault, power_control |
+| Motor | `lib_adp_*` | DJI C620/GM6020, DM4310/4340, LK MG8016E, Navision |
+| Serial | `lib_serial_*` | HX-10HM, H12H servo bus |
+| CAN | `tskptt_*` / `taskptt_*` | FDCAN/EXFDCAN routers |
 
----
-
-## 📐 Coding Conventions
-
-- **Style**: 2-space indent, K&R braces, PascalCase for tasks
-- **Guard**: CubeMX `USER CODE BEGIN/END` blocks
-- **Task naming**: `TaskName_Task.h/.c` with `Start_TaskName_Task()` entry
-- **Include guards**: `UPPER_SNAKE_CASE`
-- **Module prefixes**: `Led_`, `Buzzer_`, `Fdcan_`, etc.
-- **Commit format**: Conventional Commits (`feat:`, `fix:`, `chore:`)
-
----
-
-## 🔗 Dependencies
-
-The `Frameworks/` modules are internal modular libraries designed to be used as **submodules** from an internal OmniX repository. When setting up this project for development:
-
-```bash
-# Clone the main repository
-git clone https://github.com/Chenxi-Li24/OmniX-Engineer.git
-cd OmniX-Engineer
-
-# Initialize framework submodules (requires access to internal repos)
-git submodule update --init --recursive
-```
-
-> **Note**: Some Frameworks modules reference internal OmniX repositories. Contact the OmniX team for access.
+Auto-link: `Frameworks/<name>/{Inc,Src}/` → static library → linked to main executable.
 
 ---
 
 ## 📄 License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
-> The STM32 HAL/FreeRTOS components in `Drivers/` and `Middlewares/` are distributed under their respective STMicroelectronics and Amazon/FreeRTOS licenses.
-
----
+MIT — see [LICENSE](LICENSE). STM32 HAL/FreeRTOS components under respective vendor licenses.
 
 ## 🙏 Acknowledgments
 
-- **OmniX Team** — Hardware design, framework architecture, competition strategy
-- **STMicroelectronics** — STM32CubeH7 HAL & CMSIS
+- **OmniX Team** — Hardware, framework architecture, competition strategy
+- **DJI RoboMaster** — Competition platform, referee system, VT03 modules
+- **STMicroelectronics** — STM32CubeH7
 - **FreeRTOS** — Real-time kernel
-- **DJI RoboMaster** — Competition platform & referee system
 
 ---
 
-<p align="center"><i>Built for RoboMaster 2026 · OmniX</i></p>
+<p align="center"><i>🏆 RMUL 2026 Shanghai Champion · Built by OmniX</i></p>
